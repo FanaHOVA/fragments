@@ -21,17 +21,21 @@ export async function POST(req: Request) {
     messages,
     userID,
     template,
-    model,
-    config,
+    modelConfigs,
   }: {
     messages: CoreMessage[]
     userID: string
     template: Templates
-    model: LLMModel
-    config: LLMModelConfig
+    modelConfigs: Array<{
+      model: LLMModel
+      config: LLMModelConfig
+    }>
   } = await req.json()
 
-  const limit = !config.apiKey
+  console.log('modelConfigs', modelConfigs)
+  // Check rate limit using the most permissive config
+  const shouldCheckRateLimit = modelConfigs.every((mc) => !mc.config.apiKey)
+  const limit = shouldCheckRateLimit
     ? await ratelimit(
         userID,
         rateLimitMaxRequests,
@@ -50,22 +54,45 @@ export async function POST(req: Request) {
     })
   }
 
-  console.log('userID', userID)
-  // console.log('template', template)
-  console.log('model', model)
-  // console.log('config', config)
+  // Validate all models have a default mode
+  for (const { model } of modelConfigs) {
+    const mode = getDefaultMode(model)
+    console.log('model', model)
+    console.log('mode', mode)
 
-  const { model: modelNameString, apiKey: modelApiKey, ...modelParams } = config
-  const modelClient = getModelClient(model, config)
+    if (!mode) {
+      console.error(`Model ${model.id} does not have a default generation mode.`)
+      return new Response(`Model ${model.name} is misconfigured. Please contact support.`, {
+        status: 500,
+      })
+    }
+  }
 
-  const stream = await streamObject({
-    model: modelClient as LanguageModel,
-    schema,
-    system: toPrompt(template),
-    messages,
-    mode: getDefaultMode(model),
-    ...modelParams,
+  const responses = await Promise.all(
+    modelConfigs.map(async ({ model, config }) => {
+      const modelClient = getModelClient(model, config)
+      const mode = getDefaultMode(model)!
+
+      const stream = await streamObject({
+        model: modelClient as LanguageModel,
+        schema,
+        system: toPrompt(template),
+        messages,
+        mode,
+        ...config,
+      })
+
+      const response = await stream.toTextStreamResponse()
+      const result = await response.json()
+
+      return {
+        modelId: model.id,
+        ...result,
+      }
+    })
+  )
+
+  return new Response(JSON.stringify(responses), {
+    headers: { 'Content-Type': 'application/json' },
   })
-
-  return stream.toTextStreamResponse()
 }

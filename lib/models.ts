@@ -64,7 +64,7 @@ export function getModelClient(model: LLMModel, config: LLMModelConfig) {
 }
 
 export function getDefaultMode(model: LLMModel) {
-  const { id: modelNameString, providerId } = model
+  const { providerId } = model
 
   // monkey patch fireworks
   if (providerId === 'fireworks') {

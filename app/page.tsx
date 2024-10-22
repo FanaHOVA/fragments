@@ -4,7 +4,6 @@ import { AuthDialog } from '@/components/auth-dialog'
 import { Chat } from '@/components/chat'
 import { ChatInput } from '@/components/chat-input'
 import { ChatPicker } from '@/components/chat-picker'
-import { ChatSettings } from '@/components/chat-settings'
 import { NavBar } from '@/components/navbar'
 import { Preview } from '@/components/preview'
 import { AuthViewType, useAuth } from '@/lib/auth'
@@ -27,16 +26,25 @@ export default function Home() {
   const [selectedTemplate, setSelectedTemplate] = useState<'auto' | TemplateId>(
     'auto',
   )
-  const [languageModel, setLanguageModel] = useLocalStorage<LLMModelConfig>(
-    'languageModel',
+  const [primaryModel, setPrimaryModel] = useLocalStorage<LLMModelConfig>(
+    'primaryModel',
     {
       model: 'claude-3-5-sonnet-20240620',
+      // you can add default temperature, etc. here
+    },
+  )
+
+  const [secondaryModel, setSecondaryModel] = useLocalStorage<LLMModelConfig>(
+    'secondaryModel',
+    {
+      model: 'gpt-4-turbo',
+      // you can add default temperature, etc. here
     },
   )
 
   const posthog = usePostHog()
 
-  const [result, setResult] = useState<ExecutionResult>()
+  const [result, setResult] = useState<{ [modelId: string]: ExecutionResult }>({})
   const [messages, setMessages] = useState<Message[]>([])
   const [fragment, setFragment] = useState<DeepPartial<FragmentSchema>>()
   const [currentTab, setCurrentTab] = useState<'code' | 'fragment'>('code')
@@ -47,7 +55,7 @@ export default function Home() {
   const { session, apiKey } = useAuth(setAuthDialog, setAuthView)
 
   const currentModel = modelsList.models.find(
-    (model) => model.id === languageModel.model,
+    (model) => model.id === primaryModel.model,
   )
   const currentTemplate =
     selectedTemplate === 'auto'
@@ -56,41 +64,43 @@ export default function Home() {
   const lastMessage = messages[messages.length - 1]
 
   const { object, submit, isLoading, stop, error } = useObject({
-    api:
-      currentModel?.id === 'o1-preview' || currentModel?.id === 'o1-mini'
-        ? '/api/chat-o1'
-        : '/api/chat',
+    api: '/api/chat',
     schema,
     onError: (error) => {
       if (error.message.includes('request limit')) {
         setIsRateLimited(true)
       }
     },
-    onFinish: async ({ object: fragment, error }) => {
+    onFinish: async ({ object: responses, error }) => {
       if (!error) {
-        // send it to /api/sandbox
-        console.log('fragment', fragment)
-        setIsPreviewLoading(true)
-        posthog.capture('fragment_generated', {
-          template: fragment?.template,
-        })
+        const results: { [modelId: string]: ExecutionResult } = {}
+        
+        for (const response of responses) {
+          const { modelId, fragment, result } = response
+          console.log('fragment', fragment)
+          setIsPreviewLoading(true)
+          posthog.capture('fragment_generated', {
+            template: fragment?.template,
+          })
 
-        const response = await fetch('/api/sandbox', {
-          method: 'POST',
-          body: JSON.stringify({
-            fragment,
-            userID: session?.user?.id,
-            apiKey,
-          }),
-        })
+          const sandboxResponse = await fetch('/api/sandbox', {
+            method: 'POST',
+            body: JSON.stringify({
+              fragment,
+              userID: session?.user?.id,
+              apiKey,
+            }),
+          })
 
-        const result = await response.json()
-        console.log('result', result)
-        posthog.capture('sandbox_created', { url: result.url })
+          const resultData = await sandboxResponse.json()
+          console.log('result', resultData)
+          posthog.capture('sandbox_created', { url: resultData.url })
 
-        setResult(result)
-        setCurrentPreview({ fragment, result })
-        setMessage({ result })
+          results[modelId] = resultData
+        }
+
+        setResult(results)
+        setFragment(responses[0].fragment) // Use first response for fragment
         setCurrentTab('fragment')
         setIsPreviewLoading(false)
       }
@@ -163,12 +173,22 @@ export default function Home() {
       content,
     })
 
+    const modelConfigs = [
+      {
+        model: modelsList.models.find((m) => m.id === primaryModel.model)!,
+        config: primaryModel,
+      },
+      {
+        model: modelsList.models.find((m) => m.id === secondaryModel.model)!,
+        config: secondaryModel,
+      },
+    ].filter((m) => m.model) // Filter out any undefined models
+
     submit({
       userID: session?.user?.id,
       messages: toAISDKMessages(updatedMessages),
       template: currentTemplate,
-      model: currentModel,
-      config: languageModel,
+      modelConfigs,
     })
 
     setChatInput('')
@@ -177,8 +197,17 @@ export default function Home() {
 
     posthog.capture('chat_submit', {
       template: selectedTemplate,
-      model: languageModel.model,
+      primaryModel: primaryModel.model,
+      secondaryModel: secondaryModel.model,
     })
+  }
+
+  function handleModelChange(modelConfig: LLMModelConfig, isPrimary: boolean) {
+    if (isPrimary) {
+      setPrimaryModel({ ...primaryModel, ...modelConfig })
+    } else {
+      setSecondaryModel({ ...secondaryModel, ...modelConfig })
+    }
   }
 
   function retry() {
@@ -187,7 +216,7 @@ export default function Home() {
       messages: toAISDKMessages(messages),
       template: currentTemplate,
       model: currentModel,
-      config: languageModel,
+      config: primaryModel,
     })
   }
 
@@ -208,10 +237,6 @@ export default function Home() {
     supabase
       ? supabase.auth.signOut()
       : console.warn('Supabase is not initialized')
-  }
-
-  function handleLanguageModelChange(e: LLMModelConfig) {
-    setLanguageModel({ ...languageModel, ...e })
   }
 
   function handleSocialClick(target: 'github' | 'x' | 'discord') {
@@ -288,7 +313,7 @@ export default function Home() {
             input={chatInput}
             handleInputChange={handleSaveInputChange}
             handleSubmit={handleSubmitAuth}
-            isMultiModal={currentModel?.multiModal || false}
+            isMultiModal={false}
             files={files}
             handleFileChange={handleFileChange}
           >
@@ -297,14 +322,9 @@ export default function Home() {
               selectedTemplate={selectedTemplate}
               onSelectedTemplateChange={setSelectedTemplate}
               models={modelsList.models}
-              languageModel={languageModel}
-              onLanguageModelChange={handleLanguageModelChange}
-            />
-            <ChatSettings
-              languageModel={languageModel}
-              onLanguageModelChange={handleLanguageModelChange}
-              apiKeyConfigurable={!process.env.NEXT_PUBLIC_NO_API_KEY_INPUT}
-              baseURLConfigurable={!process.env.NEXT_PUBLIC_NO_BASE_URL_INPUT}
+              primaryModel={primaryModel}
+              secondaryModel={secondaryModel}
+              onModelChange={handleModelChange}
             />
           </ChatInput>
         </div>

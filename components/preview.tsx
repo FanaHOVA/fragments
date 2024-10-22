@@ -31,14 +31,16 @@ export function Preview({
   isChatLoading: boolean
   isPreviewLoading: boolean
   fragment?: DeepPartial<FragmentSchema>
-  result?: ExecutionResult
+  result?: { [modelId: string]: ExecutionResult }
   onClose: () => void
 }) {
   if (!fragment) {
     return null
   }
 
-  const isLinkAvailable = result?.template !== 'code-interpreter-v1'
+  const hasDeployableResult = Object.values(result || {}).some(
+    (r) => r.template !== 'code-interpreter-v1'
+  )
 
   return (
     <div className="absolute md:relative top-0 left-0 shadow-2xl md:rounded-tl-3xl md:rounded-bl-3xl md:border-l md:border-y bg-popover h-full w-full overflow-auto">
@@ -96,7 +98,7 @@ export function Preview({
           </div>
           {result && (
             <div className="flex items-center justify-end gap-2">
-              {isLinkAvailable && (
+              {hasDeployableResult && (
                 <DeployDialog
                   url={result.url!}
                   sbxId={result.sbxId!}
@@ -109,19 +111,33 @@ export function Preview({
         {fragment && (
           <div className="overflow-y-auto w-full h-full">
             <TabsContent value="code" className="h-full">
-              {fragment.code && fragment.file_path && (
-                <FragmentCode
-                  files={[
-                    {
-                      name: fragment.file_path,
-                      content: fragment.code,
-                    },
-                  ]}
-                />
-              )}
+              <div className="grid grid-cols-2 gap-4">
+                {Object.entries(result || {}).map(([modelId, modelResult]) => (
+                  <div key={modelId} className="w-full">
+                    <div className="text-sm font-medium mb-2 px-4 pt-4">{modelId}</div>
+                    {fragment.code && fragment.file_path && (
+                      <FragmentCode
+                        files={[
+                          {
+                            name: fragment.file_path,
+                            content: fragment.code,
+                          },
+                        ]}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
             </TabsContent>
             <TabsContent value="fragment" className="h-full">
-              {result && <FragmentPreview result={result as ExecutionResult} />}
+              <div className="grid grid-cols-2 gap-4">
+                {Object.entries(result || {}).map(([modelId, modelResult]) => (
+                  <div key={modelId} className="w-full">
+                    <div className="text-sm font-medium mb-2 px-4 pt-4">{modelId}</div>
+                    <FragmentPreview result={modelResult} />
+                  </div>
+                ))}
+              </div>
             </TabsContent>
           </div>
         )}

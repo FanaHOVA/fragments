@@ -146,6 +146,14 @@
       "providerId": "ollama",
       "name": "Mistral Large",
       "multiModal": false
+    },
+    {
+      "id": "custom",
+      "provider": "Custom",
+      "providerId": "custom",
+      "name": "Custom Model",
+      "multiModal": false,
+      "isCustom": true
     }
   ]
 }
